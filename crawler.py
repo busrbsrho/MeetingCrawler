@@ -28,8 +28,8 @@ import subprocess
 from urllib.parse import urljoin, urlparse
 import platform
 
-
 print(platform.architecture())
+
 
 class WebCrawler:
     def __init__(self, urls, operation, max_links, headless=False):
@@ -72,7 +72,8 @@ class WebCrawler:
         assert os.path.exists(self.download_dir), f"Download directory does not exist: {self.download_dir}"
         assert os.access(self.download_dir, os.W_OK), f"No write permission for download directory: {self.download_dir}"
 
-        self.driver = webdriver.Chrome(service=ChromeService(executable_path="chromedriver.exe"), options=chrome_options)
+        self.driver = webdriver.Chrome(service=ChromeService(executable_path="chromedriver.exe"),
+                                       options=chrome_options)
         os.makedirs(self.download_dir, exist_ok=True)
         self.driver.maximize_window()
 
@@ -127,7 +128,7 @@ class WebCrawler:
         return len(elements) > 0
 
     def play_generic_video(self, url):
-        if "cnn.com" in url :
+        if "cnn.com" in url:
             try:
                 # Load the URL
                 self.driver.get(url)
@@ -232,25 +233,6 @@ class WebCrawler:
         except Exception as e:
             print(f"Error handling iframes: {e}")
 
-    def click_near_center_of_screen(self):
-        try:
-            action = ActionChains(self.driver)
-            # Get the size of the window
-            window_size = self.driver.get_window_size()
-            center_x = window_size['width'] / 2
-            center_y = window_size['height'] / 2
-
-            # Click slightly to the left of the center of the screen
-            offset_x = center_x - 50  # Move 50 pixels left from the center
-            offset_y = center_y
-
-            # Perform the click action
-            action.move_by_offset(offset_x, offset_y).click().perform()
-            print(f"Clicked at ({offset_x}, {offset_y}) relative to the screen center.")
-            time.sleep(5)  # Wait to see if the video starts playing
-        except Exception as e:
-            print(f"Error while trying to click near the center of the screen: {e}")
-
     def attempt_to_play_video(self, video):
         try:
             if video.get_attribute('paused') == 'true':
@@ -259,50 +241,6 @@ class WebCrawler:
                 time.sleep(5)  # Wait for some video to play
         except Exception as e:
             print(f"Error while trying to play video: {e}")
-
-    def click_play_button(self):
-        try:
-            # Example play button selectors, may need to adjust for CNN
-            play_button_selectors = [
-                'button.play-button',
-                'playIconTitle',
-                '.video-player__play-button',
-                'div.vjs-play-control',
-                'button[aria-label="Play"]',
-                '.overlay-play-button',  # Example for CNN overlay play button
-                'div.play-overlay'  # Another possible overlay selector
-            ]
-            for selector in play_button_selectors:
-                try:
-                    play_button = WebDriverWait(self.driver, 10).until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
-                    )
-                    self.scroll_into_view(play_button)
-                    play_button.click()
-                    print(f"Clicked play button with selector {selector}")
-                    time.sleep(5)
-                    break
-                except (TimeoutException, NoSuchElementException, ElementClickInterceptedException) as e:
-                    print(f"Failed to click play button with selector {selector}: {e}")
-
-        except Exception as e:
-            print(f"Failed to find and click play button: {e}")
-
-    def click_center_of_element(self, element):
-        try:
-            action = ActionChains(self.driver)
-            # Move to the center of the element and click
-            action.move_to_element(element).move_by_offset(
-                element.size['width'] / 2, element.size['height'] / 2).click().perform()
-            time.sleep(5)  # Wait to see if the video starts playing
-        except Exception as e:
-            print(f"Error while trying to click in the middle of the video: {e}")
-
-    def scroll_into_view(self, element):
-        try:
-            self.driver.execute_script("arguments[0].scrollIntoView(true);", element)
-        except Exception as e:
-            print(f"Error scrolling element into view: {e}")
 
     def extract_links(self, html, base_url):
         soup = BeautifulSoup(html, 'html.parser')
@@ -351,20 +289,6 @@ class WebCrawler:
 
         print(f"URL categorized as Category: {category}, Attribution: {attribution}")
         return category, attribution
-
-    def sniff_traffic(self, timeout=30, identifier=""):
-        captured_packets = []
-
-        def packet_callback(packet):
-            captured_packets.append(packet)
-
-        print(f"Starting sniffing for {timeout} seconds with identifier {identifier}...")
-        sniffer = AsyncSniffer(prn=packet_callback, store=0)
-        sniffer.start()
-        time.sleep(timeout)
-        sniffer.stop()
-        print(f"Sniffing complete. Captured {len(captured_packets)} packets.")
-        return captured_packets
 
     def download_file(self, url, retries=1):
         filename = urlparse(url).path.split('/')[-1]
@@ -531,18 +455,36 @@ class WebCrawler:
                 print(f"Skipping invalid URL: {file_url}")
                 continue
 
+            # Create unique identifiers for each download
+            unique_identifier = f"{int(time.time())}"
+            timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+            pcap_file = f"download_traffic_{unique_identifier}_{timestamp}.pcap"
+            log_file = f"download_log_{unique_identifier}_{timestamp}.txt"
+            download_success = False  # Flag to check if the download was successful
+
+            # Start capturing traffic before opening the browser to catch all traffic
+            # Apply random network conditions before the download begins
+            print("Applying random network conditions.")
+            self.apply_random_network_conditions()
+
+            print("Starting traffic capture for download.")
+            self.start_capture(unique_identifier)
+
             try:
-                # Download the file using requests
+                # Open the browser to start a clean session
+                self.open_browser()
+
+                # Attempt to download the file using requests
                 response = requests.get(file_url, stream=True)
                 response.raise_for_status()  # Raise an HTTPError for bad responses
+                total_size = int(response.headers.get('Content-Length', 0))  # Get the total size from headers
+                downloaded_size = 0
                 print(f"Server response status for {file_url}: {response.status_code}")
 
                 # Determine the file name (use the last part of the URL path)
                 filename = os.path.basename(parsed_url.path)
                 file_name_without_extension, file_extension = os.path.splitext(filename)
-                unique_id = f"{int(time.time())}"
-                timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-                unique_file_name = f"{file_name_without_extension}_{unique_id}_{timestamp}{file_extension}"
+                unique_file_name = f"{file_name_without_extension}_{unique_identifier}_{timestamp}{file_extension}"
 
                 # Save the file to the local filesystem in the specified downloads directory
                 file_path = os.path.join(self.download_dir, unique_file_name)
@@ -552,16 +494,39 @@ class WebCrawler:
                     for chunk in response.iter_content(chunk_size=8192):
                         if chunk:  # Filter out keep-alive chunks
                             file.write(chunk)
+                            downloaded_size += len(chunk)
 
-                print(f"Downloaded file {file_url} saved as {file_path}")
+                # Check if the downloaded file size matches the expected size
+                if total_size != 0 and downloaded_size != total_size:
+                    print(f"Download incomplete: {downloaded_size}/{total_size} bytes downloaded.")
+                else:
+                    print(f"Successfully downloaded file: {file_path} ({downloaded_size} bytes)")
+                    download_success = True  # Set the flag to True since the download was successful
 
             except requests.RequestException as e:
                 print(f"Failed to download {file_url}: {e}")
             except Exception as e:
                 print(f"An unexpected error occurred: {e}")
+            finally:
+                # Stop the capture regardless of download success or failure
+                print("Stopping traffic capture.")
+                captured_packets = self.stop_capture()
 
-        # Verify the directory contents (optional)
-        print("Files in download directory:", os.listdir(self.download_dir))
+                # Only save the captured packets, log, and organize metadata if the download was successful
+                if download_success:
+                    if captured_packets:
+                        wrpcap(pcap_file, captured_packets)
+                        print(f"Traffic for {file_url} download recorded in {pcap_file}")
+                        self.organize_pcap(pcap_file, file_url, timestamp)
+
+                    # Save browser log
+                    self.save_browser_log(log_file)
+                    print(f"Logs saved to {log_file}.")
+                else:
+                    print("Download failed; no capture, log, or metadata saved.")
+
+            # Close the browser after processing
+            self.close_browser()
 
     def is_downloadable(self, url):
         downloadable_extensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.zip', '.tar', '.gz', '.rar',
@@ -748,38 +713,24 @@ class WebCrawler:
             self.visited.add(url)
             self.total_links += 1
 
-            unique_identifier = f"{self.total_links}_{int(time.time())}"
-            self.apply_random_network_conditions()
-
-            self.close_browser()  # Close any previous browser session
-            self.open_browser()  # Open a new browser session
-
-            self.start_capture(unique_identifier)
             content = self.fetch_content(url)
             if content:
                 timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-                pcap_file = f"downloadzip_traffic_{self.total_links}_{timestamp}_{unique_identifier}.pcap"
-                log_file = f"browser_log_{self.total_links}_{timestamp}_{unique_identifier}.txt"
+                log_file = f"browser_log_{self.total_links}_{timestamp}.txt"
                 self.save_browser_log(log_file)
                 print(f"Browser log for {url} saved in {log_file}")
 
+                # Extract links from the page and download files individually
                 links = self.extract_links(content, url)
-                self.download_files(content, url)
-                self.wait_for_downloads()  # Wait for all downloads to complete
+                self.download_files(content, url)  # This method now handles traffic capture and browser reopening
 
                 for link in links:
                     if link not in self.visited:
                         self.queue.put(link)
                 self.crawled_links.update(links)
 
-                captured_packets = self.stop_capture()
-                if captured_packets:
-                    wrpcap(pcap_file, captured_packets)
-                    print(f"Traffic for {url} recorded in {pcap_file}")
-                    self.organize_pcap(pcap_file, url, timestamp)
-
             self.queue.task_done()
-            self.close_browser()  # Close the browser after processing the URL
+            self.close_browser()  # Ensure the browser is closed after processing the URL
 
     def close_browser(self):
         if self.driver:
@@ -932,8 +883,8 @@ if __name__ == "__main__":
     with open('download_links.json', 'r') as file:
         urls = json.load(file)
 
-    operation = 'video'
-    max_links = 100  # Adjust this number as needed
+    operation = 'download'
+    max_links = 1  # Adjust this number as needed
 
     crawler = WebCrawler(urls, operation, max_links, headless=False)
     crawler.start_crawling(operation)
