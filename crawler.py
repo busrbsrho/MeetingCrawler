@@ -38,7 +38,7 @@ class WebCrawler:
         self.visited = set()
         self.total_links = 0
         self.queue = Queue()  # Use a FIFO Queue for BFS
-        self.download_dir = "downloads_for_project"
+        self.download_dir = os.path.abspath("downloads_for_project")  # Ensure absolute path
         self.crawled_links = set()
         self.network_condition = "normal"
         self.operation = operation
@@ -52,30 +52,45 @@ class WebCrawler:
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--mute-audio")
 
-        # Inside the __init__ method of your WebCrawler class
+        # Set up Chrome options for automatic file download
         prefs = {
-            "download.default_directory": self.download_dir,
-            "download.prompt_for_download": False,
+            "download.default_directory": self.download_dir,  # Set absolute download directory
+            "download.prompt_for_download": False,  # Disable download prompt
             "download.directory_upgrade": True,
-            "safebrowsing.enabled": True
+            "safebrowsing.enabled": False,  # Disable Safe Browsing to prevent interference
+            "profile.default_content_settings.popups": 0,
         }
         chrome_options.add_experimental_option("prefs", prefs)
 
-        print(f"Chrome is configured to download to: {self.download_dir}")
-        chrome_options.add_experimental_option("prefs", prefs)
 
         capabilities = DesiredCapabilities.CHROME
         capabilities['goog:loggingPrefs'] = {'performance': 'ALL', 'browser': 'ALL'}
         chrome_options.set_capability("goog:loggingPrefs", {'performance': 'ALL'})
-        print(f"Download directory set in Chrome options: {self.download_dir}")
-        print(f"Chrome preferences: {prefs}")
-        assert os.path.exists(self.download_dir), f"Download directory does not exist: {self.download_dir}"
-        assert os.access(self.download_dir, os.W_OK), f"No write permission for download directory: {self.download_dir}"
+
+        # Ensure the download directory exists
+        os.makedirs(self.download_dir, exist_ok=True)
 
         self.driver = webdriver.Chrome(service=ChromeService(executable_path="chromedriver.exe"),
                                        options=chrome_options)
-        os.makedirs(self.download_dir, exist_ok=True)
         self.driver.maximize_window()
+
+    #''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    def configure_selenium(self):
+        # Set up Chrome options for automatic file download
+        chrome_options = Options()
+        prefs = {
+            "download.default_directory": self.download_dir,  # Set download directory
+            "download.prompt_for_download": False,  # Disable download prompt
+            "download.directory_upgrade": True,
+            "safebrowsing.enabled": True,  # Enable safe browsing
+            "profile.default_content_settings.popups": 0,
+        }
+        chrome_options.add_experimental_option("prefs", prefs)
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+
+    #'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
     def save_browser_log(self, logfile):
         print("Retrieving performance logs...")
@@ -434,104 +449,132 @@ class WebCrawler:
         cap = pyshark.FileCapture(pcap_file, only_summaries=True)
         return {"network_conditions": self.network_condition}
 
+    def wait_for_download_completion(download_dir, expected_filename, timeout=60):
+        """
+        Monitors the download directory to detect when the expected file appears,
+        and waits until any temporary download files disappear, indicating completion.
+
+        :param download_dir: Directory where files are being downloaded.
+        :param expected_filename: The expected filename of the completed download.
+        :param timeout: Maximum time to wait in seconds (default is 60 seconds).
+        :return: True if the file is found within the timeout, False otherwise.
+        """
+        start_time = time.time()
+        expected_file_path = os.path.join(download_dir, expected_filename)
+        temp_extensions = ['.crdownload', '.part', '.tmp']  # Common temporary download extensions
+
+        print(f"Waiting for {expected_filename} to appear in {download_dir}...")
+
+        while time.time() - start_time < timeout:
+            # List all current files in the download directory
+            current_files = os.listdir(download_dir)
+
+            # Check if the expected file is found
+            if expected_filename in current_files:
+                print(f"Detected completed file: {expected_filename}")
+                return True
+
+            # Check for temporary files and print their status
+            for file in current_files:
+                for temp_ext in temp_extensions:
+                    if file.endswith(temp_ext):
+                        temp_file_path = os.path.join(download_dir, file)
+                        print(f"Temporary file detected: {temp_file_path}")
+
+            # Wait briefly before checking again
+            time.sleep(1)
+
+        # Final check after timeout to see if the expected file has appeared
+        if os.path.exists(expected_file_path):
+            print(f"Final check: {expected_filename} is present.")
+            return True
+
+        print("Download completion check timed out.")
+        return False
+
     def download_files(self, content, base_url):
-        # Define the pattern for downloadable files
-        file_pattern = re.compile(
-            r'href=["\'](.*?(\.zip|\.pdf|\.exe|\.tar\.gz|\.rar|\.7z|\.docx|\.xlsx|\.jpg|\.png|\.mp3|\.mp4|\.csv))["\']')
+        # Use BeautifulSoup for more reliable HTML parsing
+        soup = BeautifulSoup(content, 'html.parser')
 
-        # Find all matches in the content
-        matches = file_pattern.findall(content)
+        # Extract all anchor tags with href attributes
+        links = soup.find_all('a', href=True)
 
-        for match in matches:
-            file_url = match[0]  # Get the URL from the regex match
+        for link in links:
+            # Get the href attribute value
+            file_url = link['href']
 
-            # Convert relative URLs to absolute URLs
-            file_url = urljoin(base_url, file_url)
-            print(f"Attempting to download file from URL: {file_url}")
-
-            # Validate the URL (ensure it's properly formed and points to a downloadable file)
+            # Clean and validate the URL
+            file_url = urljoin(base_url, file_url)  # Ensure the URL is absolute
             parsed_url = urlparse(file_url)
-            if not parsed_url.scheme or not parsed_url.netloc:
-                print(f"Skipping invalid URL: {file_url}")
+
+            # Check if the URL is valid and points to a downloadable file type
+            if not parsed_url.scheme or not parsed_url.netloc or not file_url.lower().endswith(('.zip', '.pdf', '.exe',
+                                                                                                '.tar.gz', '.rar',
+                                                                                                '.7z', '.docx', '.xlsx',
+                                                                                                '.jpg', '.png', '.mp3',
+                                                                                                '.mp4', '.csv',
+                                                                                                '.ico')):
+                print(f"Skipping invalid or non-downloadable URL: {file_url}")
                 continue
 
-            # Create unique identifiers for each download
-            unique_identifier = f"{int(time.time())}"
-            timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-            pcap_file = f"download_traffic_{unique_identifier}_{timestamp}.pcap"
-            log_file = f"download_log_{unique_identifier}_{timestamp}.txt"
-            download_success = False  # Flag to check if the download was successful
+            print(f"Attempting to download file from URL: {file_url}")
 
-            # Start capturing traffic before opening the browser to catch all traffic
-            # Apply random network conditions before the download begins
-            print("Applying random network conditions.")
-            self.apply_random_network_conditions()
-
-            print("Starting traffic capture for download.")
-            self.start_capture(unique_identifier)
-
+            # Proceed with the rest of your download and capture code
             try:
-                # Open the browser to start a clean session
-                self.open_browser()
+                # Close the browser if it is already open
+                if self.driver:
+                    self.close_browser()
 
-                # Attempt to download the file using requests
-                response = requests.get(file_url, stream=True)
-                response.raise_for_status()  # Raise an HTTPError for bad responses
-                total_size = int(response.headers.get('Content-Length', 0))  # Get the total size from headers
-                downloaded_size = 0
-                print(f"Server response status for {file_url}: {response.status_code}")
+                # Start capturing traffic before opening the browser to catch all traffic
+                unique_identifier = f"{int(time.time())}"
+                timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+                pcap_file = f"download_traffic_{unique_identifier}_{timestamp}.pcap"
 
-                # Determine the file name (use the last part of the URL path)
-                filename = os.path.basename(parsed_url.path)
-                file_name_without_extension, file_extension = os.path.splitext(filename)
-                unique_file_name = f"{file_name_without_extension}_{unique_identifier}_{timestamp}{file_extension}"
+                # Apply random network conditions before the download begins
+                # Reinitialize the browser before each download
 
-                # Save the file to the local filesystem in the specified downloads directory
-                file_path = os.path.join(self.download_dir, unique_file_name)
-                print(f"Saving file as: {file_path}")
+                self.__init__(self.urls, self.operation, self.max_links)  # Reinitialize WebDriver and other settings
 
-                with open(file_path, 'wb') as file:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:  # Filter out keep-alive chunks
-                            file.write(chunk)
-                            downloaded_size += len(chunk)
+                self.apply_random_network_conditions()
+                self.start_capture(unique_identifier)
 
-                # Check if the downloaded file size matches the expected size
-                if total_size != 0 and downloaded_size != total_size:
-                    print(f"Download incomplete: {downloaded_size}/{total_size} bytes downloaded.")
-                else:
-                    print(f"Successfully downloaded file: {file_path} ({downloaded_size} bytes)")
-                    download_success = True  # Set the flag to True since the download was successful
+                # Navigate to the file URL using the fresh WebDriver session
+                self.driver.get(file_url)
 
-            except requests.RequestException as e:
-                print(f"Failed to download {file_url}: {e}")
+                # Wait for the download to start (adjust this as necessary)
+                WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.TAG_NAME, 'body'))
+                )
+
+                # Wait until the file appears in the download directory
+                self.wait_for_download_completion(self.download_dir, timeout=60)
+
+                print(f"Downloaded {file_url} to {self.download_dir}")
+
             except Exception as e:
-                print(f"An unexpected error occurred: {e}")
+                print(f"Failed to download {file_url} using Selenium: {e}")
+
             finally:
                 # Stop the capture regardless of download success or failure
                 print("Stopping traffic capture.")
                 captured_packets = self.stop_capture()
 
                 # Only save the captured packets, log, and organize metadata if the download was successful
-                if download_success:
-                    if captured_packets:
-                        wrpcap(pcap_file, captured_packets)
-                        print(f"Traffic for {file_url} download recorded in {pcap_file}")
-                        self.organize_pcap(pcap_file, file_url, timestamp)
+                if captured_packets:
+                    wrpcap(pcap_file, captured_packets)
+                    print(f"Traffic for {file_url} download recorded in {pcap_file}")
+                    self.organize_pcap(pcap_file, file_url, timestamp)  # Ensure PCAP file is organized properly
 
-                    # Save browser log
-                    self.save_browser_log(log_file)
-                    print(f"Logs saved to {log_file}.")
-                else:
-                    print("Download failed; no capture, log, or metadata saved.")
+                # Save browser log
+                log_file = f"download_log_{unique_identifier}.txt"
+                self.save_browser_log(log_file)
+                print(f"Logs saved to {log_file}.")
 
-            # Close the browser after processing
-            self.close_browser()
+                # Close the browser after download attempt
+                self.close_browser()
 
-    def is_downloadable(self, url):
-        downloadable_extensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.zip', '.tar', '.gz', '.rar',
-                                   '.exe']
-        return any(url.endswith(ext) for ext in downloadable_extensions)
+            # Verify download completion and log
+            print("Files in download directory:", os.listdir(self.download_dir))
 
     def download_and_capture(self, url, retries=5):
         filename = urlparse(url).path.split('/')[-1]
@@ -715,10 +758,10 @@ class WebCrawler:
 
             content = self.fetch_content(url)
             if content:
-                timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-                log_file = f"browser_log_{self.total_links}_{timestamp}.txt"
-                self.save_browser_log(log_file)
-                print(f"Browser log for {url} saved in {log_file}")
+                # timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+                # log_file = f"browser_log_{self.total_links}_{timestamp}.txt"
+                # self.save_browser_log(log_file)
+                # print(f"Browser log for {url} saved in {log_file}")
 
                 # Extract links from the page and download files individually
                 links = self.extract_links(content, url)
@@ -884,7 +927,7 @@ if __name__ == "__main__":
         urls = json.load(file)
 
     operation = 'download'
-    max_links = 1  # Adjust this number as needed
+    max_links = 2  # Adjust this number as needed
 
     crawler = WebCrawler(urls, operation, max_links, headless=False)
     crawler.start_crawling(operation)
