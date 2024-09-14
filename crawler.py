@@ -57,11 +57,10 @@ class WebCrawler:
             "download.default_directory": self.download_dir,  # Set absolute download directory
             "download.prompt_for_download": False,  # Disable download prompt
             "download.directory_upgrade": True,
-            "safebrowsing.enabled": False,  # Disable Safe Browsing to prevent interference
+            "safebrowsing.enabled": True,  # Disable Safe Browsing to prevent interference
             "profile.default_content_settings.popups": 0,
         }
         chrome_options.add_experimental_option("prefs", prefs)
-
 
         capabilities = DesiredCapabilities.CHROME
         capabilities['goog:loggingPrefs'] = {'performance': 'ALL', 'browser': 'ALL'}
@@ -449,43 +448,46 @@ class WebCrawler:
         cap = pyshark.FileCapture(pcap_file, only_summaries=True)
         return {"network_conditions": self.network_condition}
 
-    def wait_for_download_completion(download_dir, expected_filename, timeout=60):
+    def wait_for_download_completion(self, download_dir, expected_filename=None, timeout=60):
         """
-        Monitors the download directory to detect when the expected file appears,
-        and waits until any temporary download files disappear, indicating completion.
+        Monitors the download directory to detect when downloads are complete.
+        If an expected filename is provided, it looks specifically for that file.
+        Otherwise, it waits until no temporary download files are detected.
 
         :param download_dir: Directory where files are being downloaded.
-        :param expected_filename: The expected filename of the completed download.
+        :param expected_filename: The expected filename of the completed download, if known.
         :param timeout: Maximum time to wait in seconds (default is 60 seconds).
-        :return: True if the file is found within the timeout, False otherwise.
+        :return: True if the file is found or downloads complete within the timeout, False otherwise.
         """
         start_time = time.time()
-        expected_file_path = os.path.join(download_dir, expected_filename)
         temp_extensions = ['.crdownload', '.part', '.tmp']  # Common temporary download extensions
 
-        print(f"Waiting for {expected_filename} to appear in {download_dir}...")
+        print(f"Monitoring {download_dir} for completion...")
 
         while time.time() - start_time < timeout:
             # List all current files in the download directory
             current_files = os.listdir(download_dir)
 
-            # Check if the expected file is found
-            if expected_filename in current_files:
-                print(f"Detected completed file: {expected_filename}")
-                return True
+            # Check if the expected file is found, if specified
+            if expected_filename:
+                expected_file_path = os.path.join(download_dir, expected_filename)
+                if os.path.exists(expected_file_path):
+                    print(f"Detected completed file: {expected_filename}")
+                    return True
 
-            # Check for temporary files and print their status
-            for file in current_files:
-                for temp_ext in temp_extensions:
-                    if file.endswith(temp_ext):
-                        temp_file_path = os.path.join(download_dir, file)
-                        print(f"Temporary file detected: {temp_file_path}")
+            # Check for temporary files to detect ongoing downloads
+            downloading = any(file.endswith(tuple(temp_extensions)) for file in current_files)
+
+            if not downloading:
+                # If no temporary files are found, consider the download complete
+                print("No active temporary files detected. Download appears complete.")
+                return True
 
             # Wait briefly before checking again
             time.sleep(1)
 
         # Final check after timeout to see if the expected file has appeared
-        if os.path.exists(expected_file_path):
+        if expected_filename and os.path.exists(os.path.join(download_dir, expected_filename)):
             print(f"Final check: {expected_filename} is present.")
             return True
 
@@ -508,32 +510,26 @@ class WebCrawler:
             parsed_url = urlparse(file_url)
 
             # Check if the URL is valid and points to a downloadable file type
-            if not parsed_url.scheme or not parsed_url.netloc or not file_url.lower().endswith(('.zip', '.pdf', '.exe',
-                                                                                                '.tar.gz', '.rar',
-                                                                                                '.7z', '.docx', '.xlsx',
-                                                                                                '.jpg', '.png', '.mp3',
-                                                                                                '.mp4', '.csv',
-                                                                                                '.ico')):
+            if not parsed_url.scheme or not parsed_url.netloc or not file_url.lower().endswith(
+                    ('.zip', '.pdf', '.exe', '.tar.gz', '.rar', '.7z', '.docx', '.xlsx', '.jpg', '.png', '.mp3', '.mp4',
+                     '.csv', '.ico')):
                 print(f"Skipping invalid or non-downloadable URL: {file_url}")
                 continue
 
             print(f"Attempting to download file from URL: {file_url}")
 
-            # Proceed with the rest of your download and capture code
             try:
                 # Close the browser if it is already open
                 if self.driver:
                     self.close_browser()
 
-                # Start capturing traffic before opening the browser to catch all traffic
+                # Reinitialize the browser before each download attempt
+                self.__init__(self.urls, self.operation, self.max_links)  # This re-applies the correct settings
+
+                # Apply network conditions and start capturing traffic
                 unique_identifier = f"{int(time.time())}"
                 timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
                 pcap_file = f"download_traffic_{unique_identifier}_{timestamp}.pcap"
-
-                # Apply random network conditions before the download begins
-                # Reinitialize the browser before each download
-
-                self.__init__(self.urls, self.operation, self.max_links)  # Reinitialize WebDriver and other settings
 
                 self.apply_random_network_conditions()
                 self.start_capture(unique_identifier)
@@ -633,13 +629,7 @@ class WebCrawler:
             else:
                 print("No packets captured for download")
 
-    def wait_for_download_completion(self, download_dir, timeout=600):
-        start_time = time.time()
-        while any(fname.endswith('.crdownload') for fname in os.listdir(download_dir)):
-            if time.time() - start_time > timeout:
-                raise TimeoutError("Download did not complete within the given timeout period")
-            time.sleep(1)
-        print("Download completed")
+
 
     def click_and_download(self, url):
         print(f"Click and download from: {url}")
