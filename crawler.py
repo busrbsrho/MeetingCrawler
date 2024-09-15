@@ -69,7 +69,7 @@ class WebCrawler:
         # Ensure the download directory exists
         os.makedirs(self.download_dir, exist_ok=True)
 
-        self.driver = webdriver.Chrome(service=ChromeService(executable_path="chromedriver.exe"),
+        self.driver = webdriver.Chrome(service=ChromeService(),
                                        options=chrome_options)
         self.driver.maximize_window()
 
@@ -512,7 +512,7 @@ class WebCrawler:
             # Check if the URL is valid and points to a downloadable file type
             if not parsed_url.scheme or not parsed_url.netloc or not file_url.lower().endswith(
                     ('.zip', '.pdf', '.exe', '.tar.gz', '.rar', '.7z', '.docx', '.xlsx', '.jpg', '.png', '.mp3', '.mp4',
-                     '.csv', '.ico')):
+                     '.csv', '.ico', '.json')):
                 print(f"Skipping invalid or non-downloadable URL: {file_url}")
                 continue
 
@@ -796,6 +796,13 @@ class WebCrawler:
 
             unique_identifier = f"{self.total_links}_{int(time.time())}"
 
+            # Close the browser if it's already open to ensure a fresh session
+            self.close_browser()
+
+            # Reopen the browser for a fresh session before starting capture
+            self.open_browser()
+
+            # Start capturing traffic
             self.start_capture(unique_identifier)
             content = self.fetch_content(url)
             if content:
@@ -807,12 +814,14 @@ class WebCrawler:
                 self.save_browser_log(log_file)
                 print(f"Browser log for {url} saved in {log_file}")
 
+                # Ensure correct directory is used for logs
                 directory = os.path.dirname(pcap_file)
-
-                # Step 2: Construct the new file path
                 log_file = os.path.join(directory, log_file)
 
+                # Wait to capture enough traffic, adjust the sleep time as needed
                 time.sleep(30)
+
+                # Stop capturing traffic and save it
                 captured_packets = self.stop_capture()
                 if captured_packets:
                     wrpcap(pcap_file, captured_packets)
@@ -821,13 +830,18 @@ class WebCrawler:
                 else:
                     print(f"No packets captured for {url}")
 
+                # Extract and queue additional links
                 links = self.extract_links(content, url)
                 for link in links:
                     if link not in self.visited:
                         self.queue.put(link)
                 self.crawled_links.update(links)
 
+            # Mark the URL as processed
             self.queue.task_done()
+
+            # Close the browser after processing the URL to ensure clean state for the next capture
+            self.close_browser()
 
     def crawl_for_video(self):
         for url in self.urls:
@@ -916,8 +930,8 @@ if __name__ == "__main__":
     with open('download_links.json', 'r') as file:
         urls = json.load(file)
 
-    operation = 'download'
-    max_links = 2  # Adjust this number as needed
+    operation = 'browse'
+    max_links = 10000  # Adjust this number as needed
 
     crawler = WebCrawler(urls, operation, max_links, headless=False)
     crawler.start_crawling(operation)
