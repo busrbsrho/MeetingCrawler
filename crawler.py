@@ -42,6 +42,7 @@ class WebCrawler:
         self.crawled_links = set()
         self.network_condition = "normal"
         self.operation = operation
+        self.success = True
 
         chrome_options = Options()
 
@@ -61,6 +62,8 @@ class WebCrawler:
             "profile.default_content_settings.popups": 0,
         }
         chrome_options.add_experimental_option("prefs", prefs)
+        chrome_options.add_argument(
+            "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
 
         capabilities = DesiredCapabilities.CHROME
         capabilities['goog:loggingPrefs'] = {'performance': 'ALL', 'browser': 'ALL'}
@@ -130,7 +133,9 @@ class WebCrawler:
             )
             play_button.click()
             time.sleep(5)
+            self.success = True
         except Exception as e:
+            self.success = False
             print(f"Failed to play YouTube video: {e}")
 
     def check_element_presence(self, dynamic_xpath):
@@ -163,9 +168,13 @@ class WebCrawler:
                 # Click the element
                 element.click()
                 print("Element found and clicked using the specific XPath.")
+                self.success = True
 
             except TimeoutException:
                 print("The specified element was not found within the given time frame.")
+                self.success = False
+
+
             except Exception as e:
                 print(f"An error occurred: {e}")
 
@@ -190,9 +199,11 @@ class WebCrawler:
                 # Click the video play button
                 element.click()
                 print("BBC video play button found and clicked.")
-
+                self.success = True
             except TimeoutException:
                 print("The specified element was not found within the given time frame.")
+                self.success = False
+
             except Exception as e:
                 print(f"An error occurred: {e}")
 
@@ -216,20 +227,59 @@ class WebCrawler:
 
             except TimeoutException:
                 print("The specified element was not found within the given time frame.")
+                self.success = False
+
             except Exception as e:
                 print(f"An error occurred: {e}")
 
         if "israelhayom.co.il" in url:
             try:
-                # Open the desired webpage
-                self.driver.get(
-                    "https://www.israelhayom.co.il/podcasts/article/15800076")
+                # Load the video page
+                self.driver.get(url)
 
-                time.sleep(6)
+                # Wait for the page to load completely
+                WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.TAG_NAME, "body"))
+                )
 
-                element = self.driver.find_element(By.XPATH, "//*[contains(@id, 'video_')]/button")
+                # Define the XPath based on the button class observed in the screenshot
+                play_button_xpath = '//button[contains(@class, "vjs-big-play-button")]'
+
+                # Wait for the element to be present and clickable
+                element = WebDriverWait(self.driver, 25).until(
+                    EC.element_to_be_clickable((By.XPATH, play_button_xpath))
+                )
+
+                # Click the play button
                 element.click()
-                print("Element found and clicked.")
+                print("Video.js play button found and clicked.")
+                self.success = True
+
+            except TimeoutException:
+                print("The specified element was not found within the given time frame.")
+                self.success = False
+            except Exception as e:
+                print(f"An error occurred: {e}")
+        if "vod.walla.co.il" in url:
+            try:
+
+                # Wait for the page to load completely
+                WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.TAG_NAME, "body"))
+                )
+
+                # Define the XPath based on the button class observed in the screenshot
+                play_button_xpath = '//button[contains(@class, "vjs-big-play-button")]'
+
+                # Wait for the element to be present and clickable
+                element = WebDriverWait(self.driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, play_button_xpath))
+                )
+
+                # Click the play button
+                element.click()
+                print("Video.js play button found and clicked.")
+
             except TimeoutException:
                 print("The specified element was not found within the given time frame.")
             except Exception as e:
@@ -277,8 +327,12 @@ class WebCrawler:
 
         print(f"Categorizing URL: {url}")
 
-        if any(video_keyword in netloc for video_keyword in
-               ['youtube', 'vimeo', 'dailymotion', 'netflix', 'hulu', 'cnn', 'bbc', 'video', 'videos']):
+        if (any(video_keyword in netloc for video_keyword in
+                ['youtube', 'vimeo', 'dailymotion', 'netflix', 'hulu', 'cnn', 'bbc', 'video', 'videos', 'israelhayom'
+                    ,
+                 'israelhayom.co.il/culture/', 'israelhayom.co.il/podcasts/', 'israelhayom.co.il/news/',
+                 'israelhayom.co.il/sport/'])
+                and operation == 'video'):
             category = "video"
             attribution = "VOD"
         elif 'zoom.us' in netloc or 'zoom.com' in netloc:
@@ -629,8 +683,6 @@ class WebCrawler:
             else:
                 print("No packets captured for download")
 
-
-
     def click_and_download(self, url):
         print(f"Click and download from: {url}")
         try:
@@ -857,37 +909,30 @@ class WebCrawler:
             self.visited.add(url)
             self.total_links += 1
 
-            # Apply network conditions before initiating the traffic capture.
             print(f"Applying network conditions for {url}")
             self.apply_random_network_conditions()
 
             self.close_browser()  # Close any previous browser session
             self.open_browser()  # Open a new browser session
 
-            # Start capturing traffic right before loading the URL
             unique_identifier = f"{self.total_links}_{int(time.time())}"
             print(f"Starting traffic capture for {url}")
             self.start_capture(unique_identifier)
 
-            # Fetch content after starting the capture
             content = self.fetch_content(url)
 
             if content:
-                # If content is successfully fetched, play videos if any
                 self.play_videos(url)
+                if self.success is True:
+                    print("Waiting 60 seconds to capture traffic while the video plays...")
+                    time.sleep(60)  # Delay to allow video streaming data capture
 
-                # Wait for a specific duration while the video plays and traffic is captured
-                print("Waiting 60 seconds to capture traffic while the video plays...")
-                time.sleep(60)  # Delay for 60 seconds to allow video streaming data capture
-
-            # Stop the capture after the wait
             captured_packets = self.stop_capture()
 
-            if captured_packets:
+            if captured_packets and getattr(self, 'success', True):
                 timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
                 pcap_file = f"web_traffic_{self.total_links}_{timestamp}_{unique_identifier}.pcap"
 
-                # Save browser log
                 log_file = f"browser_log_{self.total_links}_{timestamp}_{unique_identifier}.txt"
                 self.save_browser_log(log_file)
                 print(f"Browser log for {url} saved in {log_file}")
@@ -896,15 +941,33 @@ class WebCrawler:
                 print(f"Traffic for {url} recorded in {pcap_file}")
                 self.organize_pcap(pcap_file, url, timestamp)
             else:
-                print("No packets captured for {url}")
+                print(f"No packets captured for {url} or success is {getattr(self, 'success', False)}")
+                self.success = True
 
+            # Extract and prioritize video-related links
             links = self.extract_links(content, url)
-            for link in links:
+            video_links = self.filter_video_links(links)
+
+            for link in video_links:
                 if link not in self.visited:
                     self.queue.put(link)
-            self.crawled_links.update(links)
+            self.crawled_links.update(video_links)
 
             self.queue.task_done()
+
+
+
+    def filter_video_links(self, links):
+        """Filters links to prioritize those likely containing video content."""
+        video_keywords = ['video', 'watch', 'play', 'stream', 'media', 'movie', 'clip', 'tv']
+        video_links = []
+
+        for link in links:
+            # Check if any keyword is in the URL path or query
+            if any(keyword in link.lower() for keyword in video_keywords):
+                video_links.append(link)
+
+        return video_links
 
     def start_capture(self, unique_identifier):
         # Get the IP address of the current machine
@@ -930,8 +993,9 @@ if __name__ == "__main__":
     with open('download_links.json', 'r') as file:
         urls = json.load(file)
 
-    operation = 'browse'
-    max_links = 10000  # Adjust this number as needed
+    operation = 'video'
+
+    max_links = 3  # Adjust this number as needed
 
     crawler = WebCrawler(urls, operation, max_links, headless=False)
     crawler.start_crawling(operation)
