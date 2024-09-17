@@ -1045,9 +1045,9 @@ class WebCrawler:
             current_url = driver.current_url
 
             # Logic for the first site
-            if "file.io" in current_url and "ufile.io" not in current_url:
+            if "file.io" in current_url and "ufile.io" not in current_url and "gofile.io" not in current_url:
                 print("Detected first site. Waiting for confirmation text...")
-                WebDriverWait(driver, 10).until(
+                WebDriverWait(driver, 120).until(
                     EC.text_to_be_present_in_element((By.TAG_NAME, "body"), "Your file is ready to share!")
                 )
                 print(f"File '{os.path.basename(file_path)}' uploaded successfully on the first site!")
@@ -1055,12 +1055,18 @@ class WebCrawler:
                 # Logic for the second site - looking for specific text
             elif "ufile.io" in current_url:
                 print("Detected second site. Waiting for confirmation text...")
-                WebDriverWait(driver, 10).until(
+                WebDriverWait(driver, 120).until(
                     EC.text_to_be_present_in_element((By.TAG_NAME, "body"),
                                                      "Done! Your file is available via the following URL:")
                 )
                 print(f"File '{os.path.basename(file_path)}' uploaded successfully on the second site!")
-
+            elif "gofile.io" in current_url:
+                print("Detected second site. Waiting for confirmation text...")
+                WebDriverWait(driver, 120).until(
+                    EC.text_to_be_present_in_element((By.TAG_NAME, "body"),
+                                                     "Your files have been successfully uploaded")
+                )
+                print(f"File '{os.path.basename(file_path)}' uploaded successfully on the second site!")
             else:
                 print("Site not recognized. Please check the URL or element selectors.")
 
@@ -1134,7 +1140,7 @@ if __name__ == "__main__":
 
     operation = 'upload'
 
-    max_links = 9000  # Adjust this number as needed
+    max_links = 2000  # Adjust this number as needed
 
     crawler = WebCrawler(urls, operation, max_links, headless=False)
     crawler.start_crawling(operation)
