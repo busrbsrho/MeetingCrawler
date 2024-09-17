@@ -28,7 +28,30 @@ import subprocess
 from urllib.parse import urljoin, urlparse
 import platform
 
+
+
 print(platform.architecture())
+
+
+def get_random_file(directory):
+    """
+    Selects a random file from the specified directory.
+
+    :param directory: The path to the directory from which to select the file.
+    :return: The full path of the randomly selected file.
+    """
+    try:
+        # List all files in the directory
+        files = [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
+        if not files:
+            raise Exception("No files found in the directory.")
+
+        # Select a random file
+        random_file = random.choice(files)
+        return os.path.join(directory, random_file)
+    except Exception as e:
+        print("Error selecting file:", e)
+        return None
 
 
 class WebCrawler:
@@ -344,6 +367,9 @@ class WebCrawler:
         elif 'webrtc.org' in netloc:
             category = "messaging"
             attribution = "real-time"
+        elif 'file.io' in netloc or "Ufile.io" in netloc or "GoFile.io" in netloc or "Guru99.com" in netloc:
+            category = "upload"
+            attribution = "file-upload"
         elif any(path.endswith(ext) for ext in
                  ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.zip', '.tar', '.gz', '.rar', '.exe']):
             category = "file"
@@ -771,6 +797,9 @@ class WebCrawler:
                 self.crawl_for_browsing()
             elif operation.lower() == 'video':
                 self.crawl_for_video()
+            elif operation.lower() == 'upload':
+                self.crawl_for_upload()
+
             else:
                 print("Invalid operation specified. Please choose from 'downloading', 'browsing', or 'video'.")
         finally:
@@ -955,8 +984,6 @@ class WebCrawler:
 
             self.queue.task_done()
 
-
-
     def filter_video_links(self, links):
         """Filters links to prioritize those likely containing video content."""
         video_keywords = ['video', 'watch', 'play', 'stream', 'media', 'movie', 'clip', 'tv']
@@ -987,15 +1014,127 @@ class WebCrawler:
         captured_packets = self.sniffer.results  # Access the results property
         return captured_packets
 
+    def upload_file_selenium(self,url, directory=r'C:\Users\ליאור\PycharmProjects\MeetingCrawler\downloads_for_project'):
+        """
+        Automates the file upload process on a webpage using Selenium, selecting a random file from the specified directory.
+
+        :param url: The URL of the webpage with the file upload form.
+        :param directory: The path to the directory containing files to upload.
+        """
+        file_path = get_random_file(directory)
+        if not file_path:
+            print("No file selected. Exiting.")
+            return
+
+        # options = Options()
+        # Uncomment to see browser actions
+        # options.add_argument("--headless")  # Remove this if you want to see the browser actions
+
+        driver = webdriver.Chrome()
+
+        try:
+            driver.get(url)
+            print("Page loaded. Waiting for file input element...")
+            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='file']")))
+
+            file_input = driver.find_element(By.CSS_SELECTOR, "input[type='file']")
+            file_input.send_keys(file_path)
+            print(f"File '{os.path.basename(file_path)}' selected for upload.")
+
+            # Determine the site based on URL or page elements
+            current_url = driver.current_url
+
+            # Logic for the first site
+            if "file.io" in current_url and "ufile.io" not in current_url:
+                print("Detected first site. Waiting for confirmation text...")
+                WebDriverWait(driver, 10).until(
+                    EC.text_to_be_present_in_element((By.TAG_NAME, "body"), "Your file is ready to share!")
+                )
+                print(f"File '{os.path.basename(file_path)}' uploaded successfully on the first site!")
+
+                # Logic for the second site - looking for specific text
+            elif "ufile.io" in current_url:
+                print("Detected second site. Waiting for confirmation text...")
+                WebDriverWait(driver, 10).until(
+                    EC.text_to_be_present_in_element((By.TAG_NAME, "body"),
+                                                     "Done! Your file is available via the following URL:")
+                )
+                print(f"File '{os.path.basename(file_path)}' uploaded successfully on the second site!")
+
+            else:
+                print("Site not recognized. Please check the URL or element selectors.")
+
+        except Exception as e:
+            print("An error occurred during the upload process:", e)
+            self.success = False
+
+        finally:
+            driver.quit()
+
+    def crawl_for_upload(self):
+        # Repeat the entire process `max_links` times
+        for _ in range(self.max_links):
+            # Add all URLs to the queue each time we start the loop
+            for url in self.urls:
+                self.queue.put(url)
+
+            # Initialize the WebDriver (e.g., Chrome) once
+            #driver = webdriver.Chrome()
+
+            # Process each URL until the queue is empty
+
+
+
+                print(f"Crawling: {url}")
+                self.visited.add(url)
+
+                print(f"Applying network conditions and starting traffic capture for {url}")
+                self.apply_random_network_conditions()
+
+                unique_identifier = f"{self.total_links}_{int(time.time())}"
+
+                # Start capturing traffic
+                self.start_capture(unique_identifier)
+                if self.success is True:
+                    # Handle file upload using the dedicated method, passing the existing driver
+                    self.upload_file_selenium(url)
+
+                    timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+                    pcap_file = f"web_traffic_{self.total_links}_{timestamp}_{unique_identifier}.pcap"
+
+                    # Save browser log
+                    log_file = f"browser_log_{self.total_links}_{timestamp}_{unique_identifier}.txt"
+                    self.save_browser_log(log_file)
+                    print(f"Browser log for {url} saved in {log_file}")
+
+                    # Ensure correct directory is used for logs
+                    directory = os.path.dirname(pcap_file)
+                    log_file = os.path.join(directory, log_file)
+
+                    # Stop capturing traffic and save it
+                    captured_packets = self.stop_capture()
+                    if captured_packets:
+                        wrpcap(pcap_file, captured_packets)
+                        print(f"Traffic for {url} recorded in {pcap_file}")
+                        self.organize_pcap(pcap_file, url, timestamp)
+                    else:
+                        print(f"No packets captured for {url}")
+
+                # Mark the URL as processed
+                self.queue.task_done()
+
+            # Close the browser after processing all URLs
+
+
 
 if __name__ == "__main__":
     # Load URLs from a JSON file
     with open('download_links.json', 'r') as file:
         urls = json.load(file)
 
-    operation = 'video'
+    operation = 'upload'
 
-    max_links = 3  # Adjust this number as needed
+    max_links = 9000  # Adjust this number as needed
 
     crawler = WebCrawler(urls, operation, max_links, headless=False)
     crawler.start_crawling(operation)
