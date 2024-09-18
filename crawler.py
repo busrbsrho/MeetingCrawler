@@ -1051,6 +1051,7 @@ class WebCrawler:
                     EC.text_to_be_present_in_element((By.TAG_NAME, "body"), "Your file is ready to share!")
                 )
                 print(f"File '{os.path.basename(file_path)}' uploaded successfully on the first site!")
+                self.success = True
 
                 # Logic for the second site - looking for specific text
             elif "ufile.io" in current_url:
@@ -1060,15 +1061,18 @@ class WebCrawler:
                                                      "Done! Your file is available via the following URL:")
                 )
                 print(f"File '{os.path.basename(file_path)}' uploaded successfully on the second site!")
+                self.success = True
             elif "gofile.io" in current_url:
                 print("Detected second site. Waiting for confirmation text...")
                 WebDriverWait(driver, 120).until(
                     EC.text_to_be_present_in_element((By.TAG_NAME, "body"),
                                                      "Your files have been successfully uploaded")
                 )
-                print(f"File '{os.path.basename(file_path)}' uploaded successfully on the second site!")
+                print(f"File '{os.path.basename(file_path)}' uploaded successfully on the third site!")
+                self.success = True
             else:
                 print("Site not recognized. Please check the URL or element selectors.")
+
 
         except Exception as e:
             print("An error occurred during the upload process:", e)
@@ -1128,7 +1132,7 @@ class WebCrawler:
 
                 # Mark the URL as processed
                 self.queue.task_done()
-
+                self.success = True
             # Close the browser after processing all URLs
 
 
